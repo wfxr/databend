@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::fmt::Display;
 use std::sync::Arc;
 
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
-use common_exception::ErrorCode;
 use common_exception::Result;
+use common_meta_app::schema::CreateTableReply;
 use common_meta_app::schema::TableInfo;
 use common_planners::Extras;
 use common_planners::Partitions;
@@ -27,6 +26,9 @@ use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 use common_streams::DataBlockStream;
 use common_streams::SendableDataBlockStream;
+use strum_macros::Display;
+use strum_macros::EnumIter;
+use strum_macros::EnumString;
 
 use crate::pipelines::new::processors::port::OutputPort;
 use crate::pipelines::new::processors::processor::ProcessorPtr;
@@ -44,22 +46,13 @@ use crate::storages::StorageContext;
 use crate::storages::StorageDescription;
 use crate::storages::Table;
 
+#[derive(Debug, Clone, EnumIter, EnumString, Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum GithubTableType {
     Comments,
     Info,
     Issues,
     PullRequests,
-}
-
-impl Display for GithubTableType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GithubTableType::Comments => write!(f, "comments"),
-            GithubTableType::Info => write!(f, "info"),
-            GithubTableType::Issues => write!(f, "issues"),
-            GithubTableType::PullRequests => write!(f, "pull_requests"),
-        }
-    }
 }
 
 pub struct GithubTable {
@@ -108,7 +101,8 @@ impl Table for GithubTable {
         _ctx: Arc<QueryContext>,
         _plan: &ReadDataSourcePlan,
     ) -> Result<SendableDataBlockStream> {
-        let arrays = get_data_from_github(self.options.clone()).await?;
+        let table: Box<dyn GithubDataGetter> = self.options.clone().into();
+        let arrays = table.get_data_from_github().await?;
         let block = DataBlock::create(self.table_info.schema(), arrays);
 
         Ok(Box::pin(DataBlockStream::create(
@@ -142,27 +136,31 @@ pub trait GithubDataGetter: Sync + Send {
     async fn get_data_from_github(&self) -> Result<Vec<ColumnRef>>;
 }
 
-fn get_table_type(options: &RepoTableOptions) -> Result<GithubTableType> {
-    match options.table_type.as_str() {
-        "comments" => Ok(GithubTableType::Comments),
-        "issues" => Ok(GithubTableType::Issues),
-        "pull_requests" => Ok(GithubTableType::PullRequests),
-        "info" => Ok(GithubTableType::Info),
-        table_type => Err(ErrorCode::UnexpectedError(format!(
-            "Unsupported Github table type: {}",
-            table_type
-        ))),
+#[async_trait::async_trait]
+pub trait GithubTableCreater: Sync + Send {
+    async fn create_table(&self, ctx: &StorageContext, tenant: &str) -> Result<CreateTableReply>;
+}
+
+impl From<RepoTableOptions> for Box<dyn GithubDataGetter> {
+    fn from(options: RepoTableOptions) -> Self {
+        match options.table_type {
+            GithubTableType::Comments => Box::new(RepoCommentsTable { options }),
+            GithubTableType::Info => Box::new(RepoInfoTable { options }),
+            GithubTableType::Issues => Box::new(RepoIssuesTable { options }),
+            GithubTableType::PullRequests => Box::new(RepoPRsTable { options }),
+        }
     }
 }
 
-async fn get_data_from_github(options: RepoTableOptions) -> Result<Vec<ColumnRef>> {
-    let table = match get_table_type(&options)? {
-        GithubTableType::Comments => RepoCommentsTable::create(options),
-        GithubTableType::Info => RepoInfoTable::create(options),
-        GithubTableType::Issues => RepoIssuesTable::create(options),
-        GithubTableType::PullRequests => RepoPRsTable::create(options),
-    };
-    table.get_data_from_github().await
+impl From<RepoTableOptions> for Box<dyn GithubTableCreater> {
+    fn from(options: RepoTableOptions) -> Self {
+        match options.table_type {
+            GithubTableType::Comments => Box::new(RepoCommentsTable { options }),
+            GithubTableType::Info => Box::new(RepoInfoTable { options }),
+            GithubTableType::Issues => Box::new(RepoIssuesTable { options }),
+            GithubTableType::PullRequests => Box::new(RepoPRsTable { options }),
+        }
+    }
 }
 
 struct GithubSource {
@@ -197,7 +195,8 @@ impl AsyncSource for GithubSource {
         }
 
         self.finish = true;
-        let arrays = get_data_from_github(self.options.clone()).await?;
+        let table: Box<dyn GithubDataGetter> = self.options.clone().into();
+        let arrays = table.get_data_from_github().await?;
         Ok(Some(DataBlock::create(self.schema.clone(), arrays)))
     }
 }

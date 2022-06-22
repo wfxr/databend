@@ -16,13 +16,14 @@ use std::sync::Arc;
 
 use common_datavalues::prelude::*;
 use common_exception::Result;
+use common_meta_app::schema::CreateTableReply;
 use common_meta_app::schema::CreateTableReq;
 use common_meta_app::schema::TableMeta;
 use common_meta_app::schema::TableNameIdent;
 
-use crate::storages::github::github_client::create_github_client;
+use super::github_table::GithubTableCreater;
+use crate::storages::github::create_github_client;
 use crate::storages::github::GithubDataGetter;
-use crate::storages::github::GithubTableType;
 use crate::storages::github::RepoTableOptions;
 use crate::storages::StorageContext;
 
@@ -40,35 +41,6 @@ pub struct RepoInfoTable {
 }
 
 impl RepoInfoTable {
-    pub fn create(options: RepoTableOptions) -> Box<dyn GithubDataGetter> {
-        Box::new(RepoInfoTable { options })
-    }
-
-    pub async fn create_table(
-        ctx: StorageContext,
-        tenant: &str,
-        options: RepoTableOptions,
-    ) -> Result<()> {
-        let mut options = options;
-        options.table_type = GithubTableType::Info.to_string();
-        let req = CreateTableReq {
-            if_not_exists: false,
-            name_ident: TableNameIdent {
-                tenant: tenant.to_string(),
-                db_name: options.owner.clone(),
-                table_name: options.repo.clone(),
-            },
-            table_meta: TableMeta {
-                schema: RepoInfoTable::schema(),
-                engine: "GITHUB".into(),
-                engine_options: options.into(),
-                ..Default::default()
-            },
-        };
-        ctx.meta.create_table(req).await?;
-        Ok(())
-    }
-
     fn schema() -> Arc<DataSchema> {
         let fields = vec![
             DataField::new(REPOSITORY, Vu8::to_data_type()),
@@ -129,5 +101,27 @@ impl GithubDataGetter for RepoInfoTable {
             Series::from_data(open_issues_count_array),
             Series::from_data(subscribers_count_array),
         ])
+    }
+}
+
+#[async_trait::async_trait]
+impl GithubTableCreater for RepoInfoTable {
+    async fn create_table(&self, ctx: &StorageContext, tenant: &str) -> Result<CreateTableReply> {
+        let opt = self.options.clone();
+        let req = CreateTableReq {
+            if_not_exists: false,
+            name_ident: TableNameIdent {
+                tenant: tenant.to_string(),
+                db_name: opt.owner.clone(),
+                table_name: opt.repo.clone(),
+            },
+            table_meta: TableMeta {
+                schema: RepoInfoTable::schema(),
+                engine: "GITHUB".into(),
+                engine_options: opt.into(),
+                ..Default::default()
+            },
+        };
+        Ok(ctx.meta.create_table(req).await?)
     }
 }

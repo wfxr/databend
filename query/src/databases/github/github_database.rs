@@ -15,15 +15,15 @@
 use common_exception::Result;
 use common_meta_app::schema::DatabaseInfo;
 use common_tracing::tracing;
+use itertools::Itertools;
 use octocrab::params;
+use strum::IntoEnumIterator;
 
 use crate::databases::Database;
 use crate::databases::DatabaseContext;
 use crate::storages::github::create_github_client;
-use crate::storages::github::RepoCommentsTable;
-use crate::storages::github::RepoInfoTable;
-use crate::storages::github::RepoIssuesTable;
-use crate::storages::github::RepoPRsTable;
+use crate::storages::github::GithubTableCreater;
+use crate::storages::github::GithubTableType;
 use crate::storages::github::RepoTableOptions;
 use crate::storages::StorageContext;
 
@@ -73,25 +73,21 @@ impl Database for GithubDatabase {
             meta: self.ctx.meta.clone(),
             in_memory_data: self.ctx.in_memory_data.clone(),
         };
-        // 2. create all tables in need
-        let mut iter = repos.items.iter();
-        for repo in &mut iter {
-            let options = RepoTableOptions {
+        let options = repos
+            .items
+            .iter()
+            .cartesian_product(GithubTableType::iter())
+            .map(|(repo, table_type)| RepoTableOptions {
                 owner: self.name().to_string(),
                 repo: repo.name.clone(),
                 token: token.clone(),
-                table_type: "".to_string(),
-            };
-
-            tracing::error!("creating {} related repo", &repo.name);
-            // Create default db
-            RepoInfoTable::create_table(storage_ctx.clone(), tenant, options.clone()).await?;
-
-            RepoIssuesTable::create_table(storage_ctx.clone(), tenant, options.clone()).await?;
-
-            RepoPRsTable::create_table(storage_ctx.clone(), tenant, options.clone()).await?;
-
-            RepoCommentsTable::create_table(storage_ctx.clone(), tenant, options.clone()).await?;
+                table_type,
+            });
+        // 2. create all tables in need
+        for opt in options {
+            tracing::error!("creating table {} for repo {}", opt.table_type, opt.repo);
+            let creator: Box<dyn GithubTableCreater> = opt.into();
+            creator.create_table(&storage_ctx, tenant).await?;
         }
 
         Ok(())
