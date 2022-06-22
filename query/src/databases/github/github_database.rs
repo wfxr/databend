@@ -55,8 +55,8 @@ impl Database for GithubDatabase {
             .meta
             .engine_options
             .get("token")
-            .unwrap_or(&"".to_string())
-            .clone();
+            .cloned()
+            .unwrap_or_default();
         // 1. get all repos in this organization
         let instance = create_github_client(&token)?;
         let repos = instance

@@ -15,24 +15,14 @@
 
 use std::sync::Arc;
 
-use common_exception::ErrorCode;
 use common_exception::Result;
 use octocrab::Octocrab;
-use reqwest::header::AUTHORIZATION;
 
-pub fn create_github_client(token: &str) -> Result<Arc<Octocrab>> {
-    if token.is_empty() {
-        return Ok(octocrab::instance());
-    }
-    Ok(Arc::new(
-        octocrab::OctocrabBuilder::new()
-            .add_header(AUTHORIZATION, format!("token {}", token))
-            .build()
-            .map_err(|err| {
-                ErrorCode::UnexpectedError(format!(
-                    "Error Occured when creating octorab client, err: {}",
-                    err
-                ))
-            })?,
-    ))
+pub fn create_github_client(token: impl Into<String>) -> Result<Arc<Octocrab>> {
+    let token = token.into();
+    let builder = match token.is_empty() {
+        true => Octocrab::builder(),
+        false => Octocrab::builder().personal_token(token),
+    };
+    Ok(octocrab::initialise(builder)?)
 }
